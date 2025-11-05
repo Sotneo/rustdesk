@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../common.dart';
 import '../utils/http_service.dart' as http;
@@ -13,6 +14,8 @@ import 'model.dart';
 import 'platform_model.dart';
 
 bool refreshingUser = false;
+const _kAutoOidcFlagKey = 'auto_oidc_login_status';
+const _kAutoOidcMaxTicks = 120;
 
 class UserModel {
   final RxString userName = ''.obs;
@@ -20,6 +23,10 @@ class UserModel {
   final RxString networkError = ''.obs;
   bool get isLogin => userName.isNotEmpty;
   WeakReference<FFI> parent;
+  Timer? _autoOidcTimer;
+  bool _autoOidcInProgress = false;
+  int _autoOidcTick = 0;
+  String _autoOidcLastUrl = '';
 
   UserModel(this.parent) {
     userName.listen((p0) {
@@ -36,6 +43,7 @@ class UserModel {
     networkError.value = '';
     final token = bind.mainGetLocalOption(key: 'access_token');
     if (token == '') {
+      await _maybeAutoOidcLogin();
       await updateOtherModels();
       return;
     }
@@ -220,5 +228,122 @@ class UserModel {
           "queryOidcLoginOptions: jsonDecode resp body failed: ${e.toString()}");
       return [];
     }
+  }
+
+  Future<void> _maybeAutoOidcLogin() async {
+    if (!isDesktop || !isWindows) return;
+    if (_autoOidcInProgress) return;
+    if (!bind.mainIsInstalled()) return;
+    if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) return;
+    final status = bind.mainGetLocalOption(key: _kAutoOidcFlagKey);
+    if (status == 'done') return;
+
+    final options = await queryOidcLoginOptions();
+    if (options.isEmpty) return;
+
+    final oidcOptions = options.whereType<Map>().where((item) {
+      final name = item['name'];
+      return name is String && name.isNotEmpty;
+    }).toList();
+
+    if (oidcOptions.length != 1 || options.length != oidcOptions.length) {
+      return;
+    }
+
+    final op = oidcOptions.first['name'].toString();
+    if (op.isEmpty) return;
+
+    _autoOidcInProgress = true;
+    _autoOidcLastUrl = '';
+    _autoOidcTick = 0;
+    await bind.mainSetLocalOption(key: _kAutoOidcFlagKey, value: 'pending');
+    try {
+      await bind.mainAccountAuth(op: op, rememberMe: true);
+    } catch (e) {
+      debugPrint('Auto OIDC login start failed: $e');
+      _autoOidcInProgress = false;
+      return;
+    }
+    _autoOidcTimer?.cancel();
+    _autoOidcTimer = Timer.periodic(
+        const Duration(seconds: 1), (_) => _pollAutoOidcResult());
+  }
+
+  void _stopAutoOidcTimer() {
+    _autoOidcTimer?.cancel();
+    _autoOidcTimer = null;
+    _autoOidcInProgress = false;
+  }
+
+  void _pollAutoOidcResult() {
+    bind.mainAccountAuthResult().then((result) async {
+      if (!_autoOidcInProgress) {
+        _stopAutoOidcTimer();
+        return;
+      }
+      if (result.isEmpty) {
+        _autoOidcTick++;
+        if (_autoOidcTick > _kAutoOidcMaxTicks) {
+          await bind.mainSetLocalOption(
+              key: _kAutoOidcFlagKey, value: 'timeout');
+          _stopAutoOidcTimer();
+        }
+        return;
+      }
+      Map<String, dynamic>? resultMap;
+      try {
+        resultMap = jsonDecode(result) as Map<String, dynamic>;
+      } catch (e) {
+        debugPrint('Failed to decode oidc auth result: $e');
+        return;
+      }
+      final url = resultMap?['url'];
+      if (url is String && url.isNotEmpty && _autoOidcLastUrl != url) {
+        try {
+          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+        } catch (e) {
+          debugPrint('Failed to launch oidc url: $e');
+        }
+        _autoOidcLastUrl = url;
+      }
+      final failedMsg = (resultMap?['failed_msg'] as String?) ?? '';
+      final authBody = resultMap?['auth_body'];
+      if (authBody is Map<String, dynamic>) {
+        await _completeAutoOidcLogin(authBody);
+        return;
+      }
+      if (failedMsg.isNotEmpty) {
+        await bind.mainSetLocalOption(key: _kAutoOidcFlagKey, value: 'failed');
+        _stopAutoOidcTimer();
+      } else {
+        _autoOidcTick++;
+        if (_autoOidcTick > _kAutoOidcMaxTicks) {
+          await bind.mainSetLocalOption(
+              key: _kAutoOidcFlagKey, value: 'timeout');
+          _stopAutoOidcTimer();
+        }
+      }
+    }).catchError((e) {
+      debugPrint('Auto OIDC login polling error: $e');
+    });
+  }
+
+  Future<void> _completeAutoOidcLogin(Map<String, dynamic> authBody) async {
+    _stopAutoOidcTimer();
+    await bind.mainSetLocalOption(key: _kAutoOidcFlagKey, value: 'done');
+    try {
+      final resp = getLoginResponseFromAuthBody(authBody);
+      if (resp.type == HttpType.kAuthResTypeToken &&
+          resp.access_token != null) {
+        await bind.mainSetLocalOption(
+            key: 'access_token', value: resp.access_token!);
+        await bind.mainSetLocalOption(
+            key: 'user_info', value: jsonEncode(resp.user ?? {}));
+      }
+    } catch (e) {
+      debugPrint('Failed to parse auto oidc login response: $e');
+    }
+    // Refresh models with new credentials.
+    Future.microtask(() => refreshCurrentUser());
   }
 }
