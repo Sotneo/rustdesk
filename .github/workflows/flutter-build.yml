@@ -69,6 +69,8 @@ jobs:
 
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
+    environment:
+      name: RS_RELAY_SERVER
     needs: [build-RustDeskTempTopMostWindow, generate-bridge]
     runs-on: ${{ matrix.job.os }}
     strategy:
