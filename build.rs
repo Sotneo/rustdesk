@@ -77,7 +77,25 @@ fn install_android_deps() {
     println!("cargo:rustc-link-lib=OpenSLES");
 }
 
+fn propagate_builtin_server_env() {
+    const SERVER_VARS: [&str; 5] = [
+        "RS_RENDEZVOUS_SERVERS",
+        "RS_RENDEZVOUS_SERVER",
+        "RS_RELAY_SERVER",
+        "RS_API_SERVER",
+        "RS_PUB_KEY",
+    ];
+    for key in SERVER_VARS {
+        if let Ok(value) = std::env::var(key) {
+            if !value.is_empty() {
+                println!("cargo:rustc-env={}={}", key, value);
+            }
+        }
+    }
+}
+
 fn main() {
+    propagate_builtin_server_env();
     hbb_common::gen_version();
     install_android_deps();
     #[cfg(all(windows, feature = "inline"))]

@@ -47,6 +47,7 @@ env:
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
   RS_RENDEZVOUS_SERVERS: "${{ secrets.RS_RENDEZVOUS_SERVER }}"
+  RS_RENDEZVOUS_SERVER: "${{ secrets.RS_RENDEZVOUS_SERVER }}"
   RS_RELAY_SERVER: "${{ secrets.RS_RELAY_SERVER }}"
   RS_API_SERVER: "${{ secrets.RS_API_SERVER }}"
   RS_PUB_KEY: "${{ secrets.RS_PUB_KEY }}"
