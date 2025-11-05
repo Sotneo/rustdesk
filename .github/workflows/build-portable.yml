@@ -1,0 +1,11 @@
+name: Build Portable
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call-flutter-build:
+    uses: ./.github/workflows/flutter-build.yml
+    with:
+      upload-artifact: true
+    secrets: inherit
