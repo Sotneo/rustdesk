@@ -47,8 +47,9 @@ use hbb_common::{
     anyhow::{anyhow, Context},
     bail,
     config::{
-        self, keys, use_ws, Config, LocalConfig, PeerConfig, PeerInfoSerde, Resolution,
-        CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT, RENDEZVOUS_PORT, RENDEZVOUS_SERVERS,
+        self, builtin_rendezvous_servers, builtin_rs_pub_key, keys, use_ws, Config, LocalConfig,
+        PeerConfig, PeerInfoSerde, Resolution, CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT,
+        RENDEZVOUS_PORT,
     },
     fs::JobType,
     futures::future::{select_ok, FutureExt},
@@ -288,19 +289,18 @@ impl Client {
         };
         let (rendezvous_server, servers, contained) = if other_server.is_empty() {
             crate::get_rendezvous_server(1_000).await
+        } else if other_server == PUBLIC_SERVER {
+            let mut default_servers = builtin_rendezvous_servers().into_iter();
+            let first_server = default_servers
+                .next()
+                .unwrap_or_else(|| other_server.to_string());
+            (
+                check_port(first_server.as_str(), RENDEZVOUS_PORT),
+                default_servers.collect(),
+                true,
+            )
         } else {
-            if other_server == PUBLIC_SERVER {
-                (
-                    check_port(RENDEZVOUS_SERVERS[0], RENDEZVOUS_PORT),
-                    RENDEZVOUS_SERVERS[1..]
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect(),
-                    true,
-                )
-            } else {
-                (check_port(other_server, RENDEZVOUS_PORT), Vec::new(), true)
-            }
+            (check_port(other_server, RENDEZVOUS_PORT), Vec::new(), true)
         };
 
         if crate::get_ipv6_punch_enabled() {
@@ -758,8 +758,9 @@ impl Client {
         key: &str,
         conn: &mut Stream,
     ) -> ResultType<Option<Vec<u8>>> {
+        let builtin_key = config::builtin_rs_pub_key();
         let rs_pk = get_rs_pk(if key.is_empty() {
-            config::RS_PUB_KEY
+            builtin_key.as_str()
         } else {
             key
         });
@@ -1790,7 +1791,7 @@ impl LoginConfigHandler {
             let server = server_key.next().unwrap_or_default();
             let args = server_key.next().unwrap_or_default();
             let key = if server == PUBLIC_SERVER {
-                config::RS_PUB_KEY.to_owned()
+                config::builtin_rs_pub_key()
             } else {
                 let mut args_map: HashMap<String, &str> = HashMap::new();
                 for arg in args.split('&') {
