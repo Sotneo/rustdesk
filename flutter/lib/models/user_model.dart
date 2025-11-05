@@ -231,27 +231,62 @@ class UserModel {
   }
 
   Future<void> _maybeAutoOidcLogin() async {
-    if (!isDesktop || !isWindows) return;
-    if (_autoOidcInProgress) return;
-    if (!bind.mainIsInstalled()) return;
-    if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) return;
+    if (!isDesktop || !isWindows) {
+      _logAutoOidc(
+          'Skip auto OIDC: not desktop/windows (desktop=$isDesktop, windows=$isWindows)');
+      return;
+    }
+    if (_autoOidcInProgress) {
+      _logAutoOidc('Skip auto OIDC: already in progress');
+      return;
+    }
+    if (!bind.mainIsInstalled()) {
+      _logAutoOidc('Skip auto OIDC: mainIsInstalled() returned false');
+      return;
+    }
+    if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) {
+      _logAutoOidc('Skip auto OIDC: access_token already present');
+      return;
+    }
     final status = bind.mainGetLocalOption(key: _kAutoOidcFlagKey);
-    if (status == 'done') return;
+    if (status == 'done') {
+      _logAutoOidc('Skip auto OIDC: status already done');
+      return;
+    }
 
     final options = await queryOidcLoginOptions();
-    if (options.isEmpty) return;
+    _logAutoOidc(
+        'Queried login options: ${options.map((e) => e.toString()).toList()}');
+    if (options.isEmpty) {
+      _logAutoOidc('Skip auto OIDC: no OIDC providers');
+      return;
+    }
 
     final oidcOptions = options.whereType<Map>().where((item) {
       final name = item['name'];
-      return name is String && name.isNotEmpty;
+      if (name is! String || name.isEmpty) {
+        return false;
+      }
+      final lower = name.toLowerCase();
+      return lower != 'users/password' && lower != 'webauth';
     }).toList();
 
-    if (oidcOptions.length != 1 || options.length != oidcOptions.length) {
+    if (oidcOptions.isEmpty) {
+      _logAutoOidc('Skip auto OIDC: no usable OIDC providers found');
+      return;
+    }
+
+    if (oidcOptions.length > 1) {
+      _logAutoOidc(
+          'Skip auto OIDC: multiple usable OIDC providers, count=${oidcOptions.length}');
       return;
     }
 
     final op = oidcOptions.first['name'].toString();
-    if (op.isEmpty) return;
+    if (op.isEmpty) {
+      _logAutoOidc('Skip auto OIDC: provider name empty');
+      return;
+    }
 
     _autoOidcInProgress = true;
     _autoOidcLastUrl = '';
@@ -259,8 +294,9 @@ class UserModel {
     await bind.mainSetLocalOption(key: _kAutoOidcFlagKey, value: 'pending');
     try {
       await bind.mainAccountAuth(op: op, rememberMe: true);
+      _logAutoOidc('Started auto OIDC with provider "$op"');
     } catch (e) {
-      debugPrint('Auto OIDC login start failed: $e');
+      _logAutoOidc('Auto OIDC login start failed: $e');
       _autoOidcInProgress = false;
       return;
     }
@@ -278,14 +314,19 @@ class UserModel {
   void _pollAutoOidcResult() {
     bind.mainAccountAuthResult().then((result) async {
       if (!_autoOidcInProgress) {
+        _logAutoOidc('Polling stopped: progress flag cleared');
         _stopAutoOidcTimer();
         return;
       }
       if (result.isEmpty) {
         _autoOidcTick++;
+        if (_autoOidcTick == 1 || _autoOidcTick % 10 == 0) {
+          _logAutoOidc('Waiting for OIDC auth result... tick=$_autoOidcTick');
+        }
         if (_autoOidcTick > _kAutoOidcMaxTicks) {
           await bind.mainSetLocalOption(
               key: _kAutoOidcFlagKey, value: 'timeout');
+          _logAutoOidc('Auto OIDC timed out after $_autoOidcTick seconds');
           _stopAutoOidcTimer();
         }
         return;
@@ -294,7 +335,7 @@ class UserModel {
       try {
         resultMap = jsonDecode(result) as Map<String, dynamic>;
       } catch (e) {
-        debugPrint('Failed to decode oidc auth result: $e');
+        _logAutoOidc('Failed to decode oidc auth result: $e');
         return;
       }
       final url = resultMap?['url'];
@@ -302,9 +343,10 @@ class UserModel {
         try {
           await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
         } catch (e) {
-          debugPrint('Failed to launch oidc url: $e');
+          _logAutoOidc('Failed to launch oidc url: $e');
         }
         _autoOidcLastUrl = url;
+        _logAutoOidc('Opened browser for URL: $url');
       }
       final failedMsg = (resultMap?['failed_msg'] as String?) ?? '';
       final authBody = resultMap?['auth_body'];
@@ -314,17 +356,20 @@ class UserModel {
       }
       if (failedMsg.isNotEmpty) {
         await bind.mainSetLocalOption(key: _kAutoOidcFlagKey, value: 'failed');
+        _logAutoOidc('Auto OIDC failed: $failedMsg');
         _stopAutoOidcTimer();
       } else {
         _autoOidcTick++;
         if (_autoOidcTick > _kAutoOidcMaxTicks) {
           await bind.mainSetLocalOption(
               key: _kAutoOidcFlagKey, value: 'timeout');
+          _logAutoOidc(
+              'Auto OIDC timed out after $_autoOidcTick seconds (no auth body)');
           _stopAutoOidcTimer();
         }
       }
     }).catchError((e) {
-      debugPrint('Auto OIDC login polling error: $e');
+      _logAutoOidc('Auto OIDC login polling error: $e');
     });
   }
 
@@ -339,11 +384,20 @@ class UserModel {
             key: 'access_token', value: resp.access_token!);
         await bind.mainSetLocalOption(
             key: 'user_info', value: jsonEncode(resp.user ?? {}));
+        _logAutoOidc('Auto OIDC login succeeded, token stored');
       }
     } catch (e) {
-      debugPrint('Failed to parse auto oidc login response: $e');
+      _logAutoOidc('Failed to parse auto oidc login response: $e');
     }
-    // Refresh models with new credentials.
     Future.microtask(() => refreshCurrentUser());
+  }
+
+  void _logAutoOidc(String message) {
+    final ts = DateTime.now().toIso8601String();
+    try {
+      bind.mainSetLocalOption(key: '__auto_oidc_log', value: '[$ts] $message');
+    } catch (e) {
+      debugPrint('Auto OIDC logging failed: $e - original message: $message');
+    }
   }
 }
