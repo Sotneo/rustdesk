@@ -819,6 +819,8 @@ jobs:
   build-rustdesk-android:
     needs: [generate-bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
+    environment:
+      name: RS_RELAY_SERVER
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -1115,6 +1117,8 @@ jobs:
   build-rustdesk-android-universal:
     needs: [build-rustdesk-android]
     name: build rustdesk android universal apk
+    environment:
+      name: RS_RELAY_SERVER
     if: ${{ inputs.upload-artifact }}
     runs-on: ubuntu-24.04
     env:
