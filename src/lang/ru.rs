@@ -539,6 +539,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Timeout in minutes", "Время ожидания (минут)"),
         ("auto_disconnect_option_tip", "Автоматически закрывать входящие сеансы при неактивности пользователя"),
         ("Connection failed due to inactivity", "Подключение не выполнено из-за неактивности"),
+        ("Connection failed, please login!", "Не удалось подключиться, пожалуйста, выполните вход."),
         ("Check for software update on startup", "Проверять обновления программы при запуске"),
         ("upgrade_rustdesk_server_pro_to_{}_tip", "Обновите RustDesk Server Pro до версии {} или новее!"),
         ("pull_group_failed_tip", "Невозможно обновить группу"),
